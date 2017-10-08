@@ -1,0 +1,143 @@
+---
+title: "Course 8 Week 4"
+author: "AV"
+date: "September 17, 2017"
+output: html_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+## 1. Load necesarry libraries, import csv's.
+Load libraries.
+```{r load libraries, message=FALSE}
+options(warn=-1)
+require(randomForest)
+require(caret)
+require(e1071)
+require(ggplot2)
+require(data.table)
+```
+
+The training dataset is taken from: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test dataset is taken from: https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+```{r loaddata, message=FALSE}
+wd <- "D:/Dropbox/project/coursera/r/c8w04"
+testf <- "pml-testing.csv"
+trainf <- "pml-training.csv"
+testcsv <- read.csv(testf)
+traincsv <- read.csv(trainf, na.strings = "#DIV/0!") #remove observations that start with "#div/0!" when reading the CSV file, this is discovered later when exploring the data.
+ds <- traincsv #set ds as dataset to work with
+```
+
+## 2. Explore & clean data
+
+```{r explore data, results="hide"}
+##ecplore data
+dim(ds)
+str(ds)
+data.frame(sapply(ds, function(y) sum(length(which(is.na(y)))))) #check which variables have too many NA's
+```
+The dataset consists of 19622 observations with 160 variables. Many of the variables are factors when they should be numeric. Some of the variables contain the useless string "DIV/0!", these should be regarded as NA's. The first 7 variables (X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvtd_timestamp, new_window and num_window) should be unrelated to the outcome classification, so remove. I'm also removing variables that contain too many NA's. 
+
+```{r clean data, message=FALSE}
+for(i in c(8:ncol(ds)-1)){ds[,i] <- as.numeric(as.character(ds[,i]))} #change factor variables to numeric
+es <- ds[,colSums(is.na(ds))==0] #remove variables with too many NA's
+cleanDataset <- es[,7:ncol(es)] #remove first 7 variables 
+```
+The resulting clean dataset contains 19622 observations over 54 variables.
+
+## 3. Create datasets used for training and testing
+From this clean dataset we create one training dataset containing 3/4 of the observations and one testing dataset with 1/4 of the observations.
+```{r create data partition}
+obsIn <- createDataPartition(cleanDataset$roll_belt, p = 0.75, list=FALSE)
+train <- cleanDataset[obsIn,]
+test <- cleanDataset[-obsIn,]
+```
+
+In order to speed things up and see how well the different machine learning algorithms do with different sample sizes we create 3 samples where n=1000, n=3000 and n=5000.
+```{r create sample for testing algo}
+sam <- sample(1:nrow(train), 1000)
+train.1ksample <- train[sam,]
+sam <- sample(1:nrow(train), 3000)
+train.3ksample <- train[sam,]
+sam <- sample(1:nrow(train), 5000)
+train.5ksample <- train[sam,]
+```
+
+## 4. Try different machine learning algorithms
+```{r results="hide", cache=TRUE, message=FALSE}
+train_control <- trainControl(method="cv", number=10)
+metric="Accuracy"
+#Random forest
+mf.rf.1ksample <- train(classe ~ ., data=train.1ksample, method="rf", trControl= train_control, metric=metric, do.trace=TRUE, ntree=5)
+max(mf.rf.1ksample$results[,2]) #0.849 accuracy
+mf.rf.3ksample <- train(classe ~ ., data=train.3ksample, method="rf", trControl= train_control, metric=metric, do.trace=TRUE, ntree=5)
+mf.rf.5ksample <- train(classe ~ ., data=train.5ksample, method="rf", trControl= train_control, metric=metric, do.trace=TRUE, ntree=5)
+
+#K Nearest Neighbour
+mf.knn.1ksample <- train(classe ~ ., data=train.1ksample, method="knn", trControl= train_control, metric=metric)
+max(mf.knn.1ksample$results[,2]) #0.614 accuracy
+mf.knn.3ksample <- train(classe ~ ., data=train.3ksample, method="knn", trControl= train_control, metric=metric)
+mf.knn.5ksample <- train(classe ~ ., data=train.5ksample, method="knn", trControl= train_control, metric=metric)
+
+#Support Vector Machine
+mf.svm.1ksample <- train(classe ~ ., data=train.1ksample, method="svmRadial", trControl= train_control, metric=metric)
+max(mf.svm.1ksample$results[,3]) #0.377 accuracy
+mf.svm.3ksample <- train(classe ~ ., data=train.3ksample, method="svmRadial", trControl= train_control, metric=metric)
+mf.svm.5ksample <- train(classe ~ ., data=train.5ksample, method="svmRadial", trControl= train_control, metric=metric)
+```
+
+Show the accuracy for the different models in a plot
+```{r plot}
+results <- resamples(list(RF1=mf.rf.1ksample, RF2=mf.rf.3ksample, RF3=mf.rf.5ksample, KNN1=mf.knn.1ksample, KNN2=mf.knn.3ksample, KNN3=mf.knn.5ksample, SVM1=mf.svm.1ksample, SVM2=mf.svm.3ksample, SVM3=mf.svm.5ksample))
+scales <- list(x=list(relation="free"), y=list(relation="free"))
+dotplot(results, scales=scales)
+```
+The random forest model is the most accurate, even with a low ntree. A larger n does improve accuracy.
+
+## 5. Prediction 
+
+Using the best model to test on the test set
+```{r }
+predict.rf.5ksample <- predict(mf.rf.5ksample, newdata=test)
+
+#result stored in confustion matrix
+confm <- confusionMatrix(table(test$classe, predict.rf.5ksample))
+confm$overall[1] #accuracy is allright, even with ntree = 5
+
+#use the model on the 20 test cases
+predict.final <- predict(mf.rf.5ksample, newdata=testcsv)
+#final result
+predict.final
+#pretty final result
+final_prediction <- transpose(data.frame(predict.final))
+names(final_prediction) <- c(1:20)
+final_prediction
+```
+
+## 6. Relationship Ntree and Accuracy?
+
+Was wondering why Ntree is normally set to 500 when accuracy with a lower number produces reasonable results. Using an Ntree as low as possible seems to reduce computing time a lot.
+```{r check the relation between ntree and accuracy, cache=TRUE}
+ntreevsacc <- data.frame(matrix(ncol=3, nrow=1))
+
+for(i in seq(1,20, by=1)){
+   ntree <- i
+   t <- system.time(mf.rf.fullset <- train(classe ~ ., data=train, method="rf", trControl=train_control, metric=metric, ntree=ntree))
+   ntreevsacc[i,] <- list(ntree, round(max(mf.rf.fullset$results[,2]), digits = 5), t[1])
+}
+
+names(ntreevsacc) <- c("Ntree", "Accuracy", "Time")
+
+gp <- ggplot(data=ntreevsacc, aes(x=Ntree, y=Accuracy)) + geom_line()
+gp
+
+
+```
+
+
+
+
+
